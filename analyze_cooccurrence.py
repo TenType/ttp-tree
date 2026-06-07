@@ -53,12 +53,8 @@ def extract_ttp_records(report: dict[str, object]) -> list[TTPRecord]:
         ttp_name = goal.get("ttp_name")
         tactic = goal.get("tactic")
         if isinstance(ttp_id, str) and isinstance(ttp_name, str):
-            normalized_id = normalize_id(ttp_id)
-            records[normalized_id] = TTPRecord(
-                normalized_id,
-                ttp_name,
-                tactic if isinstance(tactic, str) else None,
-            )
+            nid = normalize_id(ttp_id)
+            records[nid] = TTPRecord(nid, ttp_name, tactic if isinstance(tactic, str) else None)
 
     ttps = report.get("ttps", [])
     if isinstance(ttps, list):
@@ -69,12 +65,8 @@ def extract_ttp_records(report: dict[str, object]) -> list[TTPRecord]:
             ttp_name = item.get("ttp_name")
             tactic = item.get("tactic")
             if isinstance(ttp_id, str) and isinstance(ttp_name, str):
-                normalized_id = normalize_id(ttp_id)
-                records[normalized_id] = TTPRecord(
-                    normalized_id,
-                    ttp_name,
-                    tactic if isinstance(tactic, str) else None,
-                )
+                nid = normalize_id(ttp_id)
+                records[nid] = TTPRecord(nid, ttp_name, tactic if isinstance(tactic, str) else None)
 
     return list(records.values())
 
@@ -85,11 +77,13 @@ class CooccurrenceData:
     pair_counts: dict[str, dict[str, int]]
     # ttp_counts[a] = number of reports containing TTP a
     ttp_counts: dict[str, int]
-    # tactic_ttp_counts[tactic][ttp_b] = number of reports that contain at least
-    #   one TTP from `tactic` AND also contain TTP ttp_b
+    # tactic_ttp_counts[tactic][ttp] = number of reports containing at least one
+    #   TTP from `tactic` AND also containing `ttp`
     tactic_ttp_counts: dict[str, dict[str, int]]
     # tactic_counts[tactic] = number of reports containing at least one TTP from tactic
     tactic_counts: dict[str, int]
+    # total number of reports
+    total_reports: int
     ttp_names: dict[str, str]
     # ttp_tactic[ttp_id] = tactic name (or None)
     ttp_tactic: dict[str, str | None]
@@ -126,7 +120,8 @@ def build_cooccurrence_data(reports: list[dict[str, object]]) -> CooccurrenceDat
                 tactic_ttp_counts[tactic][ttp_b] += 1
 
     return CooccurrenceData(
-        pair_counts, ttp_counts, tactic_ttp_counts, tactic_counts, ttp_names, ttp_tactic
+        pair_counts, ttp_counts, tactic_ttp_counts, tactic_counts,
+        len(reports), ttp_names, ttp_tactic,
     )
 
 
@@ -134,9 +129,7 @@ def ordered_ttps(ttp_names: dict[str, str]) -> list[str]:
     return sorted(ttp_names, key=lambda ttp_id: (ttp_id, ttp_names[ttp_id].lower()))
 
 
-def compute_individual_probability(
-    data: CooccurrenceData, ttp_a: str, ttp_b: str
-) -> float:
+def compute_individual_probability(data: CooccurrenceData, ttp_a: str, ttp_b: str) -> float:
     """P(ttp_a appears | ttp_b appears)"""
     denominator = data.ttp_counts.get(ttp_b, 0)
     if denominator == 0:
@@ -144,18 +137,22 @@ def compute_individual_probability(
     return data.pair_counts.get(ttp_a, {}).get(ttp_b, 0) / denominator
 
 
-def compute_tactic_given_tactic_probability(
-    data: CooccurrenceData,
-    row_tactic: str,
-    col_ttp: str,
+def compute_tactic_given_ttp_probability(
+    data: CooccurrenceData, row_tactic: str, col_ttp: str
 ) -> float:
-    """P(at least one TTP from row_tactic appears | col_ttp appears)
-    """
+    """P(row_tactic present | col_ttp appears)"""
     denominator = data.ttp_counts.get(col_ttp, 0)
     if denominator == 0:
         return 0.0
     numerator = data.tactic_ttp_counts.get(row_tactic, {}).get(col_ttp, 0)
     return numerator / denominator
+
+
+def prior_probability(data: CooccurrenceData, col_ttp: str) -> float:
+    """P(col_ttp appears) = ttp_counts[col_ttp] / total_reports"""
+    if data.total_reports == 0:
+        return 0.0
+    return data.ttp_counts.get(col_ttp, 0) / data.total_reports
 
 
 def sheet_name_for_tactic(tactic: str) -> str:
@@ -168,9 +165,9 @@ def write_matrix(
     sheet,
     row_labels: list[str],
     col_labels: list[str],
-    value_getter,  # callable(row_label, col_label) -> float
+    value_getter,   # callable(row_label, col_label) -> float
     number_format: str,
-    row_header: str = "TTP A \\ TTP B",
+    row_header: str,
 ) -> None:
     header_font = Font(bold=True)
     sheet.freeze_panes = "B2"
@@ -194,6 +191,48 @@ def write_matrix(
         sheet.column_dimensions[column_cells[0].column_letter].width = 22
 
 
+def write_tactic_sheet(
+    sheet,
+    row_tactics: list[str],
+    col_ttps: list[str],
+    data: CooccurrenceData,
+    tactic_label: str,
+) -> None:
+    """P(row_tactic | col_ttp) * P(col_ttp)"""
+    header_font = Font(bold=True)
+    priors = {ttp: prior_probability(data, ttp) for ttp in col_ttps}
+
+    rows: list[tuple[str, float, list[float]]] = []  # (tactic, avg, [values])
+    for tactic in row_tactics:
+        values = [
+            compute_tactic_given_ttp_probability(data, tactic, ttp) * priors[ttp]
+            for ttp in col_ttps
+        ]
+        avg = sum(values) / len(values) if values else 0.0
+        rows.append((tactic, avg, values))
+
+    rows.sort(key=lambda r: r[1], reverse=True)
+
+    col_labels = [f"{t}: {data.ttp_names[t]}" for t in col_ttps]
+    sheet.freeze_panes = "C2"
+    sheet.append([f"Tactic \\ {tactic_label} TTPs", "Weighted Average", *col_labels])
+    for cell in sheet[1]:
+        cell.font = header_font
+
+    for tactic, avg, values in rows:
+        sheet.append([tactic, avg, *values])
+
+    for row in sheet.iter_rows(min_row=2, min_col=2):
+        for cell in row:
+            cell.number_format = "0.0000"
+
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.column_dimensions["A"].width = 28
+    sheet.column_dimensions["B"].width = 22
+    for column_cells in sheet.iter_cols(min_col=3, max_col=len(col_ttps) + 2):
+        sheet.column_dimensions[column_cells[0].column_letter].width = 22
+
+
 def write_workbook(output_path: Path, data: CooccurrenceData) -> None:
     workbook = Workbook()
     all_ttp_ids = ordered_ttps(data.ttp_names)
@@ -202,12 +241,11 @@ def write_workbook(output_path: Path, data: CooccurrenceData) -> None:
     assert individual_sheet is not None
     individual_sheet.title = "individual"
 
-    col_labels = [f"{t}: {data.ttp_names[t]}" for t in all_ttp_ids]
-
+    ttp_labels = [f"{t}: {data.ttp_names[t]}" for t in all_ttp_ids]
     write_matrix(
         sheet=individual_sheet,
-        row_labels=[f"{t}: {data.ttp_names[t]}" for t in all_ttp_ids],
-        col_labels=col_labels,
+        row_labels=ttp_labels,
+        col_labels=ttp_labels,
         value_getter=lambda a_label, b_label: compute_individual_probability(
             data,
             a_label.split(":")[0].strip(),
@@ -226,25 +264,13 @@ def write_workbook(output_path: Path, data: CooccurrenceData) -> None:
     sorted_tactics = sorted(ttps_by_tactic)
 
     for tactic in sorted_tactics:
-        tactic_ttps = ttps_by_tactic[tactic]
         sheet = workbook.create_sheet(title=sheet_name_for_tactic(tactic))
-
-        tactic_col_labels = [f"{t}: {data.ttp_names[t]}" for t in tactic_ttps]
-        tactic_row_labels = sorted_tactics
-
-        write_matrix(
+        write_tactic_sheet(
             sheet=sheet,
-            row_labels=tactic_row_labels,
-            col_labels=tactic_col_labels,
-            value_getter=lambda row_tactic, col_label: (
-                compute_tactic_given_tactic_probability(
-                    data,
-                    row_tactic,
-                    col_label.split(":")[0].strip(),
-                )
-            ),
-            number_format="0.0000",
-            row_header=f"Tactic \\ {tactic} TTPs",
+            row_tactics=sorted_tactics,
+            col_ttps=ttps_by_tactic[tactic],
+            data=data,
+            tactic_label=tactic,
         )
 
     workbook.save(output_path)
