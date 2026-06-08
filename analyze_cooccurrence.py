@@ -7,12 +7,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-
-@dataclass(frozen=True)
-class TTPRecord:
-    ttp_id: str
-    ttp_name: str
-    tactic: str | None
+from ttp_iter import load_reports, iter_report_ttps
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,33 +39,6 @@ def load_reports(dataset_path: Path) -> list[dict[str, object]]:
     return data
 
 
-def extract_ttp_records(report: dict[str, object]) -> list[TTPRecord]:
-    records: dict[str, TTPRecord] = {}
-
-    goal = report.get("goal")
-    if isinstance(goal, dict):
-        ttp_id = goal.get("ttp_id")
-        ttp_name = goal.get("ttp_name")
-        tactic = goal.get("tactic")
-        if isinstance(ttp_id, str) and isinstance(ttp_name, str):
-            nid = normalize_id(ttp_id)
-            records[nid] = TTPRecord(nid, ttp_name, tactic if isinstance(tactic, str) else None)
-
-    ttps = report.get("ttps", [])
-    if isinstance(ttps, list):
-        for item in ttps:
-            if not isinstance(item, dict):
-                continue
-            ttp_id = item.get("ttp_id")
-            ttp_name = item.get("ttp_name")
-            tactic = item.get("tactic")
-            if isinstance(ttp_id, str) and isinstance(ttp_name, str):
-                nid = normalize_id(ttp_id)
-                records[nid] = TTPRecord(nid, ttp_name, tactic if isinstance(tactic, str) else None)
-
-    return list(records.values())
-
-
 @dataclass
 class CooccurrenceData:
     # pair_counts[a][b] = number of reports containing both TTP a and TTP b
@@ -98,7 +66,7 @@ def build_cooccurrence_data(reports: list[dict[str, object]]) -> CooccurrenceDat
     ttp_tactic: dict[str, str | None] = {}
 
     for report in reports:
-        records = extract_ttp_records(report)
+        records = list({r.ttp_id: r for r in iter_report_ttps(report, include_goal=True)}.values())
         ttp_ids: set[str] = set()
         tactics_in_report: set[str] = set()
 
@@ -198,7 +166,7 @@ def write_tactic_sheet(
     data: CooccurrenceData,
     tactic_label: str,
 ) -> None:
-    """P(row_tactic | col_ttp) * P(col_ttp)"""
+    """Each cell: P(row_tactic | col_ttp) * P(col_ttp)"""
     header_font = Font(bold=True)
     priors = {ttp: prior_probability(data, ttp) for ttp in col_ttps}
 
