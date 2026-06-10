@@ -13,7 +13,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from ttp_iter import load_reports, iter_consecutive_pairs, normalize_id
+from ttp_iter import TTPRecord, load_reports, iter_consecutive_pairs, normalize_id
 
 END_OF_CHAIN = "END OF CHAIN"
 
@@ -56,14 +56,14 @@ def parse_groups(raw: list[str]) -> list[tuple[str, set[str]]]:
 def build_transition_counts(
     reports: list[dict[str, object]],
     all_ttp_ids: set[str],
-) -> tuple[dict[str, dict[str, int]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, int]], dict[str, TTPRecord]]:
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    ttp_names: dict[str, str] = {}
+    ttp_records: dict[str, TTPRecord] = {}
 
     for current, nxt in iter_consecutive_pairs(reports):
-        ttp_names.setdefault(current.ttp_id, current.ttp_name)
+        ttp_records.setdefault(current.ttp_id, current)
         if nxt is not None:
-            ttp_names.setdefault(nxt.ttp_id, nxt.ttp_name)
+            ttp_records.setdefault(nxt.ttp_id, nxt)
 
         if current.ttp_id not in all_ttp_ids:
             continue
@@ -72,9 +72,8 @@ def build_transition_counts(
             counts[current.ttp_id][END_OF_CHAIN] += 1
         elif nxt.tactic:
             counts[current.ttp_id][nxt.tactic] += 1
-        # nxt with no tactic cannot be attributed to a row; skip
 
-    return counts, ttp_names
+    return counts, ttp_records
 
 
 def aggregate_group_counts(
@@ -88,23 +87,33 @@ def aggregate_group_counts(
     return aggregated
 
 
+def _record_label(record: TTPRecord) -> str:
+    tactic = f" ({record.tactic})" if record.tactic else ""
+    return f"{record.ttp_id}: {record.ttp_name}{tactic}"
+
+
 def group_corner_label(
     group_ttp_ids: set[str],
-    ttp_names: dict[str, str],
+    ttp_records: dict[str, TTPRecord],
 ) -> str:
     if len(group_ttp_ids) == 1:
         ttp_id = next(iter(group_ttp_ids))
-        name = ttp_names.get(ttp_id, ttp_id)
-        return f"Next tactic \\ {ttp_id}: {name}"
-    # Multiple TTPs: list IDs only (names would be too long)
-    ids = ", ".join(sorted(group_ttp_ids))
-    return f"Next tactic \\ {ids}"
+        record = ttp_records.get(ttp_id)
+        if record is not None:
+            return _record_label(record)
+        return ttp_id
+
+    parts = [
+        _record_label(ttp_records[ttp_id]) if ttp_id in ttp_records else ttp_id
+        for ttp_id in sorted(group_ttp_ids)
+    ]
+    return ", ".join(parts)
 
 
 def write_sheet(
     sheet,
     group_ttp_ids: set[str],
-    ttp_names: dict[str, str],
+    ttp_records: dict[str, TTPRecord],
     counts: dict[str, dict[str, int]],
 ) -> None:
     aggregated = aggregate_group_counts(group_ttp_ids, counts)
@@ -112,7 +121,7 @@ def write_sheet(
 
     ordered_rows = sorted(aggregated, key=lambda row: -aggregated[row])
 
-    corner = group_corner_label(group_ttp_ids, ttp_names)
+    corner = group_corner_label(group_ttp_ids, ttp_records)
     header_font = Font(bold=True)
     sheet.freeze_panes = "B2"
     sheet.append([corner, "Proportion", "Count"])
@@ -160,7 +169,7 @@ def main() -> None:
     )
 
     reports = load_reports(dataset_path)
-    counts, ttp_names = build_transition_counts(reports, all_ttp_ids)
+    counts, ttp_records = build_transition_counts(reports, all_ttp_ids)
 
     workbook = Workbook()
     if workbook.active is not None:
@@ -168,7 +177,7 @@ def main() -> None:
 
     for label, group_ttp_ids in groups:
         ws = workbook.create_sheet(title=sheet_name(label))
-        write_sheet(ws, group_ttp_ids, ttp_names, counts)
+        write_sheet(ws, group_ttp_ids, ttp_records, counts)
 
     workbook.save(output_path)
     print(f"Wrote {output_path}")

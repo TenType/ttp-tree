@@ -23,18 +23,14 @@ def load_reports(dataset_path: Path) -> list[dict[str, object]]:
     return data
 
 
-def _parse_record(item: object) -> TTPRecord | None:
-    if not isinstance(item, dict):
-        return None
-    ttp_id = item.get("ttp_id")
-    ttp_name = item.get("ttp_name")
-    tactic = item.get("tactic")
-    if not isinstance(ttp_id, str) or not isinstance(ttp_name, str):
-        return None
+def _parse_record(item: dict[str, str]) -> TTPRecord | None:
+    ttp_id = item["ttp_id"]
+    ttp_name = item["ttp_name"]
+    tactic = item["tactic"]
     return TTPRecord(
         normalize_id(ttp_id),
         ttp_name,
-        tactic if isinstance(tactic, str) else None,
+        tactic,
     )
 
 
