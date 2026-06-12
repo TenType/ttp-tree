@@ -66,14 +66,14 @@ def build_cooccurrence_data(reports: list[dict[str, object]]) -> CooccurrenceDat
     ttp_tactic: dict[str, str | None] = {}
 
     for report in reports:
-        records = list({r.ttp_id: r for r in iter_report_ttps(report, include_goal=True)}.values())
+        records = list({r.id: r for r in iter_report_ttps(report, include_goal=True)}.values())
         ttp_ids: set[str] = set()
         tactics_in_report: set[str] = set()
 
         for record in records:
-            ttp_names.setdefault(record.ttp_id, record.ttp_name)
-            ttp_tactic.setdefault(record.ttp_id, record.tactic)
-            ttp_ids.add(record.ttp_id)
+            ttp_names.setdefault(record.id, record.name)
+            ttp_tactic.setdefault(record.id, record.tactic)
+            ttp_ids.add(record.id)
             if record.tactic:
                 tactics_in_report.add(record.tactic)
 

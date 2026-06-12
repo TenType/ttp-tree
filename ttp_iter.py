@@ -1,14 +1,27 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator
+from typing import Iterator
 
 
 @dataclass(frozen=True)
 class TTPRecord:
-    ttp_id: str
-    ttp_name: str
-    tactic: str | None
+    id: str
+    name: str
+    tactic: str
+
+
+@dataclass
+class Report:
+    _raw: dict[str, object]
+
+    @property
+    def ttps(self) -> list[TTPRecord]:
+        return list(iter_report_ttps(self._raw))
+
+    # Convenience passthrough for common report fields
+    def get(self, key: str, default=None):
+        return self._raw.get(key, default)
 
 
 def normalize_id(value: str) -> str:
@@ -38,14 +51,13 @@ def iter_report_ttps(
     report: dict[str, object],
     *,
     include_goal: bool = False,
-) -> Generator[TTPRecord, None, None]:
+) -> Iterator[TTPRecord]:
     if include_goal:
         goal = report.get("goal")
         if isinstance(goal, dict):
             record = _parse_record(goal)
             if record is not None:
                 yield record
-
     ttps = report.get("ttps", [])
     if isinstance(ttps, list):
         for item in ttps:
@@ -54,21 +66,17 @@ def iter_report_ttps(
                 yield record
 
 
-def iter_all_ttps(
-    reports: list[dict[str, object]],
-    *,
-    include_goal: bool = False,
-) -> Generator[tuple[int, TTPRecord], None, None]:
-    for idx, report in enumerate(reports):
-        for record in iter_report_ttps(report, include_goal=include_goal):
-            yield idx, record
+def iter_ttps(path: Path) -> Iterator[Report]:
+    """Yield one Report per entry in the dataset file."""
+    for raw in load_reports(path):
+        yield Report(_raw=raw)
 
 
 def iter_consecutive_pairs(
     reports: list[dict[str, object]],
     *,
     include_goal: bool = False,
-) -> Generator[tuple[TTPRecord, TTPRecord | None], None, None]:
+) -> Iterator[tuple[TTPRecord, TTPRecord | None]]:
     for report in reports:
         sequence = list(iter_report_ttps(report, include_goal=include_goal))
         for i, current in enumerate(sequence):

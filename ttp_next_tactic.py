@@ -61,17 +61,17 @@ def build_transition_counts(
     ttp_records: dict[str, TTPRecord] = {}
 
     for current, nxt in iter_consecutive_pairs(reports):
-        ttp_records.setdefault(current.ttp_id, current)
+        ttp_records.setdefault(current.id, current)
         if nxt is not None:
-            ttp_records.setdefault(nxt.ttp_id, nxt)
+            ttp_records.setdefault(nxt.id, nxt)
 
-        if current.ttp_id not in all_ttp_ids:
+        if current.id not in all_ttp_ids:
             continue
 
         if nxt is None:
-            counts[current.ttp_id][END_OF_CHAIN] += 1
+            counts[current.id][END_OF_CHAIN] += 1
         elif nxt.tactic:
-            counts[current.ttp_id][nxt.tactic] += 1
+            counts[current.id][nxt.tactic] += 1
 
     return counts, ttp_records
 
@@ -89,7 +89,7 @@ def aggregate_group_counts(
 
 def _record_label(record: TTPRecord) -> str:
     tactic = f" ({record.tactic})" if record.tactic else ""
-    return f"{record.ttp_id}: {record.ttp_name}{tactic}"
+    return f"{record.id}: {record.name}{tactic}"
 
 
 def group_corner_label(
